@@ -1,63 +1,73 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
+import asyncio
+import os
+import sys
 
-# --- Scrape Logic ---
-def get_page_content(url):
-    try:
-        # Fake a user agent to avoid 403 errors
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.content, "html.parser")
+# --- Install Browsers (Hack for Streamlit Cloud) ---
+# Streamlit Cloud doesn't install Playwright browsers by default.
+# We run this command once on the first load.
+def install_playwright():
+    if "playwright_installed" not in st.session_state:
+        os.system("playwright install chromium")
+        st.session_state.playwright_installed = True
+
+try:
+    from crawl4ai import AsyncWebCrawler
+except ImportError:
+    # If import fails, install dependencies (fallback)
+    os.system("pip install crawl4ai playwright")
+    os.system("playwright install chromium")
+    from crawl4ai import AsyncWebCrawler
+
+# Run the installation check
+install_playwright()
+
+# --- Async Crawler Function ---
+async def run_crawler(url):
+    async with AsyncWebCrawler(verbose=True) as crawler:
+        result = await crawler.arun(url=url)
+        return result.markdown
+
+# --- Main Logic ---
+def main():
+    # Check Query Params for API usage
+    query_params = st.query_params
+    api_mode = query_params.get("api")
+    target_url = query_params.get("url")
+
+    # --- API MODE ---
+    if api_mode == "true" and target_url:
+        # Hide UI
+        st.markdown("""
+            <style>
+                #MainMenu, header, footer, .stApp {visibility: hidden;}
+                div.block-container {padding-top: 0rem;}
+            </style>
+        """, unsafe_allow_html=True)
         
-        # Get text and strip whitespace
-        text = soup.get_text(separator='\n', strip=True)
-        return text
-    except Exception as e:
-        return f"Error: {str(e)}"
+        # Run Async Crawler
+        try:
+            markdown_content = asyncio.run(run_crawler(target_url))
+            st.text(markdown_content)
+        except Exception as e:
+            st.text(f"Error: {str(e)}")
 
-# --- Handle Query Parameters ---
-query_params = st.query_params
-api_mode = query_params.get("api")
-target_url = query_params.get("url")
+    # --- GUI MODE ---
+    else:
+        st.title("🤖 JS-Enabled Scraper (Crawl4AI)")
+        st.warning("Note: First run may be slow (installing browser).")
 
-# --- API / CLEAN MODE ---
-if api_mode == "true" and target_url:
-    # 1. Hide standard Streamlit UI elements via CSS
-    hide_ui = """
-        <style>
-        #MainMenu {visibility: hidden;}
-        header {visibility: hidden;}
-        footer {visibility: hidden;}
-        .stApp {margin-top: -80px;}
-        div.block-container {padding-top: 0rem;}
-        </style>
-    """
-    st.markdown(hide_ui, unsafe_allow_html=True)
-    
-    # 2. Get Content
-    content = get_page_content(target_url)
-    
-    # 3. Output ONLY the content
-    # st.text preserves newlines and doesn't interpret Markdown
-    st.text(content)
+        url_input = st.text_input("Enter URL (JS/SPA supported):", "https://js.stripe.com/v3/")
+        
+        if st.button("Scrape"):
+            with st.spinner("Starting browser & scraping..."):
+                try:
+                    # Run the async function
+                    result = asyncio.run(run_crawler(url_input))
+                    st.subheader("Markdown Output")
+                    st.text_area("Result", result, height=500)
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
-# --- GUI MODE (Interactive) ---
-else:
-    st.title("📄 content-only Scraper")
-    st.write("This tool extracts raw text from a webpage.")
-
-    url_input = st.text_input("Enter URL:", "https://www.example.com")
-
-    if st.button("Get Content"):
-        if url_input:
-            with st.spinner("Fetching..."):
-                result = get_page_content(url_input)
-                st.text_area("Raw Content:", result, height=400)
-    
-    st.markdown("---")
-    st.info("To use the 'Clean View' via URL, use the format below:")
-    
-    base_url = "https://YOUR-APP.streamlit.app"
-    example = f"{base_url}/?api=true&url={url_input}"
-    st.code(example, language="text")
+if __name__ == "__main__":
+    main()
